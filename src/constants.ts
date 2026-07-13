@@ -1,0 +1,1 @@
+export const RELATIONSHIP_GRAPH_VIEW_TYPE = "weighted-relationship-graph-view";
