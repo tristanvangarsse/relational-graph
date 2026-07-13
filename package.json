@@ -1,7 +1,7 @@
 {
-    "name": "weighted-relationship-graph",
-    "version": "0.1.0",
-    "description": "Weighted relationship graph for Obsidian",
+    "name": "relational-graph",
+    "version": "1.0.0",
+    "description": "Explore weighted relationships between notes in Obsidian.",
     "main": "main.js",
     "type": "module",
     "scripts": {
@@ -24,7 +24,7 @@
         "obsidian": "latest",
         "typescript": "^5.8.3",
         "typescript-eslint": "^8.59.1",
-        "vitest": "^4.1.10"
+        "vitest": "3.2.4"
     },
     "dependencies": {
         "graphology": "^0.26.0",
