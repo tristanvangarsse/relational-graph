@@ -53,7 +53,7 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
 
     this.addCommand({
       id: "open-relationship-graph",
-      name: "Open Relationship Graph",
+      name: "Open Relational Graph",
       callback: async () => {
         await this.activateView();
       },
@@ -61,7 +61,7 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
 
     this.addRibbonIcon(
       "git-fork",
-      "Open Relationship Graph",
+      "Open Relational Graph",
       async () => {
         await this.activateView();
       },
