@@ -9,10 +9,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Weighted Relationship Graph" });
-    containerEl.createEl("p", {
-      text: "Build weighted relationships from pluggable rules, with optional recency decay.",
-    });
 
     new Setting(containerEl)
       .setName("Minimum relationship strength")
@@ -28,7 +24,7 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Initial layout duration")
-      .setDesc("How long ForceAtlas2 runs after the graph loads.")
+      .setDesc("How long the graph layout runs after the graph loads.")
       .addSlider((slider) => slider
         .setLimits(1000, 15000, 1000)
         .setDynamicTooltip()

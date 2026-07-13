@@ -30,7 +30,7 @@ export class RelationshipGraphView extends ItemView {
   }
 
   getViewType(): string { return RELATIONSHIP_GRAPH_VIEW_TYPE; }
-  getDisplayText(): string { return "Relational Graph"; }
+  getDisplayText(): string { return "Relational graph"; }
   getIcon(): string { return "git-fork"; }
 
   async onOpen(): Promise<void> {
@@ -67,7 +67,7 @@ export class RelationshipGraphView extends ItemView {
     } catch (error) {
       console.error("Relational graph scan failed", error);
       this.statusEl.setText("Graph update failed");
-      new Notice("Weighted Relational Graph: update failed. Check the developer console.");
+      new Notice("Relational graph: update failed. Check the developer console.");
     }
   }
 

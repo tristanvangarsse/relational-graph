@@ -52,19 +52,19 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
     );
 
     this.addCommand({
-      id: "open-relationship-graph",
-      name: "Open Relational Graph",
-      callback: async () => {
+    id: "open-relationship-graph",
+    name: "Open graph",
+    callback: async () => {
         await this.activateView();
-      },
+    },
     });
 
     this.addRibbonIcon(
-      "git-fork",
-      "Open Relational Graph",
-      async () => {
+    "git-fork",
+    "Open relational graph",
+    async () => {
         await this.activateView();
-      },
+    },
     );
 
     this.addSettingTab(
@@ -148,17 +148,10 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
   }
 
   onunload(): void {
-    if (this.refreshTimer !== null) {
-      window.clearTimeout(
-        this.refreshTimer,
-      );
-
+  if (this.refreshTimer !== null) {
+      window.clearTimeout(this.refreshTimer);
       this.refreshTimer = null;
     }
-
-    this.app.workspace.detachLeavesOfType(
-      RELATIONSHIP_GRAPH_VIEW_TYPE,
-    );
   }
 
   async loadSettings(): Promise<void> {

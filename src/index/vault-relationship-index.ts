@@ -256,7 +256,7 @@ export class VaultRelationshipIndex {
 
   private createGraphNode(file: TFile): GraphEntityNode {
     const cache = this.app.metadataCache.getFileCache(file);
-    const frontmatter = cache?.frontmatter as Record<string, unknown> | undefined;
+    const frontmatter = cache?.frontmatter;
     const tags = new Set<string>();
     for (const tag of cache?.tags ?? []) tags.add(tag.tag.replace(/^#/, ""));
     for (const tag of this.toStringArray(frontmatter?.tags)) tags.add(tag.replace(/^#/, ""));
