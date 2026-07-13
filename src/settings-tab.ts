@@ -15,7 +15,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
       .setDesc("Default minimum weighted strength shown in the graph toolbar.")
       .addSlider((slider) => slider
         .setLimits(0.1, 25, 0.1)
-        .setDynamicTooltip()
         .setValue(this.plugin.settings.minimumWeight)
         .onChange(async (value) => {
           this.plugin.settings.minimumWeight = value;
@@ -27,7 +26,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
       .setDesc("How long the graph layout runs after the graph loads.")
       .addSlider((slider) => slider
         .setLimits(1000, 15000, 1000)
-        .setDynamicTooltip()
         .setValue(this.plugin.settings.layoutDurationMs)
         .onChange(async (value) => {
           this.plugin.settings.layoutDurationMs = value;
@@ -49,7 +47,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
       .setDesc("After this many days, an evidence item contributes half its original weight.")
       .addSlider((slider) => slider
         .setLimits(7, 730, 7)
-        .setDynamicTooltip()
         .setValue(this.plugin.settings.recencyHalfLifeDays)
         .onChange(async (value) => {
           this.plugin.settings.recencyHalfLifeDays = value;
@@ -75,7 +72,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
       .setDesc("Scale degree-based node sizing.")
       .addSlider((slider) => slider
         .setLimits(0.5, 2, 0.1)
-        .setDynamicTooltip()
         .setValue(this.plugin.settings.nodeSizeScale)
         .onChange(async (value) => {
           this.plugin.settings.nodeSizeScale = value;
