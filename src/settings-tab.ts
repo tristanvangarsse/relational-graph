@@ -3,9 +3,7 @@ import {
   PluginSettingTab,
   Setting,
 } from "obsidian";
-
 import type WeightedRelationshipGraphPlugin from "./main";
-
 export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
   constructor(
     app: App,
@@ -13,12 +11,9 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
   ) {
     super(app, plugin);
   }
-
   display(): void {
     const { containerEl } = this;
-
     containerEl.empty();
-
     new Setting(containerEl)
       .setName("Minimum relationship strength")
       .setDesc(
@@ -34,7 +29,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
-
     new Setting(containerEl)
       .setName("Recency weighting")
       .setDesc(
@@ -48,7 +42,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
-
     new Setting(containerEl)
       .setName("Recency half-life")
       .setDesc(
@@ -64,7 +57,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
-
     new Setting(containerEl)
       .setName("Shared-context rule")
       .setDesc(
@@ -84,7 +76,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             );
           });
       });
-
     new Setting(containerEl)
       .setName("Direct-link rule")
       .setDesc(
@@ -104,7 +95,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             );
           });
       });
-
     new Setting(containerEl)
       .setName("Node size scale")
       .setDesc(
@@ -120,7 +110,21 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
-
+    new Setting(containerEl)
+      .setName("Maximum edge thickness")
+      .setDesc(
+        "Set the thickness of the strongest visible relationship. All other edges are scaled proportionally from it using their raw evidence count.",
+      )
+      .addSlider((slider) => {
+        slider
+          .setLimits(1, 20, 0.5)
+          .setValue(this.plugin.settings.maximumEdgeThickness)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.maximumEdgeThickness = value;
+            await this.plugin.saveSettings();
+          });
+      });
     new Setting(containerEl)
       .setName("Rebuild index")
       .setDesc(
@@ -135,7 +139,6 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
           });
       });
   }
-
   private async setRuleEnabled(
     ruleId: string,
     enabled: boolean,
@@ -143,16 +146,13 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
     const enabledRules = new Set(
       this.plugin.settings.enabledRuleIds,
     );
-
     if (enabled) {
       enabledRules.add(ruleId);
     } else {
       enabledRules.delete(ruleId);
     }
-
     this.plugin.settings.enabledRuleIds =
       Array.from(enabledRules);
-
     await this.plugin.saveSettings();
   }
 }

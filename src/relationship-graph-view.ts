@@ -466,6 +466,26 @@ export class RelationshipGraphView extends ItemView {
       });
     });
 
+    /*
+     * Edge thickness is normalized against the strongest visible
+     * relationship in the current filtered graph.
+     *
+     * For example, if the largest raw weight is 3:
+     * rawWeight 3 receives 100% of maximumEdgeThickness.
+     * rawWeight 1 receives 33.3% of maximumEdgeThickness.
+     */
+    const maximumRawWeight = Math.max(
+      1,
+      ...data.relationships.map((relationship) =>
+        Math.max(0, relationship.rawWeight),
+      ),
+    );
+
+    const maximumEdgeThickness = Math.max(
+      0,
+      this.plugin.settings.maximumEdgeThickness,
+    );
+
     for (const relationship of data.relationships) {
       if (
         !graph.hasNode(relationship.source) ||
@@ -475,9 +495,8 @@ export class RelationshipGraphView extends ItemView {
       }
 
       /*
-       * ForceAtlas2 reads the edge's "weight" attribute as its
-       * attraction strength. Clamping prevents unusually strong
-       * relationships from collapsing their nodes together.
+       * Physics attraction remains based on weighted relationship
+       * strength. Visual edge thickness is calculated separately.
        */
       const physicsWeight = Math.max(
         0.25,
@@ -487,10 +506,13 @@ export class RelationshipGraphView extends ItemView {
         ),
       );
 
+      const normalizedWeight =
+        Math.max(0, relationship.rawWeight) /
+        maximumRawWeight;
+
       const edgeSize =
-        0.75 +
-        Math.sqrt(Math.max(relationship.weight, 0)) *
-          1.4;
+        maximumEdgeThickness *
+        Math.pow(normalizedWeight, 2);
 
       graph.addEdgeWithKey(
         relationship.id,
@@ -499,6 +521,7 @@ export class RelationshipGraphView extends ItemView {
         {
           weight: physicsWeight,
           relationshipWeight: relationship.weight,
+          rawWeight: relationship.rawWeight,
           size: edgeSize,
           color: edgeColor,
           label: relationship.weight.toFixed(2),
@@ -604,10 +627,6 @@ export class RelationshipGraphView extends ItemView {
       draggedNode = node;
       movedDuringDrag = false;
 
-      /*
-       * Fixed nodes are not moved by ForceAtlas2. This prevents
-       * physics from fighting the pointer during dragging.
-       */
       graph.setNodeAttribute(node, "fixed", true);
       graph.setNodeAttribute(
         node,
@@ -673,10 +692,6 @@ export class RelationshipGraphView extends ItemView {
         false,
       );
 
-      /*
-       * Change this value to true if dragged nodes should stay
-       * permanently pinned after the pointer is released.
-       */
       graph.setNodeAttribute(
         releasedNode,
         "fixed",
@@ -873,42 +888,13 @@ export class RelationshipGraphView extends ItemView {
 
     this.layout = new FA2Layout(graph, {
       settings: {
-        /*
-         * Prevent nodes from overlapping based on their
-         * rendered sizes.
-         */
         adjustSizes: true,
-
-        /*
-         * Improve performance for larger graphs.
-         */
         barnesHutOptimize: graph.order > 250,
-
-        /*
-         * Pull disconnected groups toward the center.
-         */
         gravity: 0.8,
-
-        /*
-         * Increase this value to put more space between nodes.
-         */
         scalingRatio: 5,
-
-        /*
-         * Higher values reduce movement speed and jitter.
-         */
         slowDown: 10,
-
-        /*
-         * Use relationship weights as attraction strengths.
-         */
         edgeWeightInfluence: 1,
-
-        /*
-         * Create more visible clustering.
-         */
         linLogMode: true,
-
         outboundAttractionDistribution: false,
         strongGravityMode: false,
       },
