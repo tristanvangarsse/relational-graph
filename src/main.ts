@@ -2,6 +2,7 @@ import {
   Plugin,
   TFile,
   WorkspaceLeaf,
+  type EventRef,
 } from "obsidian";
 
 import {
@@ -32,6 +33,7 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
   relationshipIndex!: VaultRelationshipIndex;
 
   private refreshTimer: number | null = null;
+  private indexInitialization: Promise<void> | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -78,11 +80,9 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
      * Build the complete index once Obsidian has finished
      * loading the workspace and metadata cache.
      */
-    this.app.workspace.onLayoutReady(() => {
-      this.relationshipIndex.rebuild();
-
-      void this.refreshOpenViews();
-    });
+    void this.ensureRelationshipIndexReady().then(() =>
+      this.refreshOpenViews(),
+    );
 
     /*
      * Re-index only the Markdown note whose metadata changed.
@@ -197,6 +197,75 @@ export default class WeightedRelationshipGraphPlugin extends Plugin {
     await this.app.workspace.revealLeaf(
       leaf,
     );
+  }
+
+
+  async ensureRelationshipIndexReady(): Promise<void> {
+    if (!this.indexInitialization) {
+      this.indexInitialization = this.initializeRelationshipIndex();
+    }
+
+    await this.indexInitialization;
+  }
+
+  private async initializeRelationshipIndex(): Promise<void> {
+    /*
+     * A restored custom view can open before workspace layout or link
+     * resolution has finished. Waiting for both prevents the first scan
+     * from seeing an empty metadata cache. Each wait has a fallback so a
+     * missed Obsidian lifecycle event can never block workspace loading.
+     */
+    await this.waitForWorkspaceLayout(1_500);
+    await this.waitForMetadataResolution(2_500);
+
+    this.relationshipIndex.rebuild();
+  }
+
+  private async waitForWorkspaceLayout(timeoutMs: number): Promise<void> {
+    await new Promise<void>((resolve) => {
+      let finished = false;
+
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timeout);
+        resolve();
+      };
+
+      const timeout = window.setTimeout(finish, timeoutMs);
+      this.app.workspace.onLayoutReady(finish);
+    });
+  }
+
+  private async waitForMetadataResolution(timeoutMs: number): Promise<void> {
+    const files = this.app.vault.getMarkdownFiles();
+
+    if (
+      files.length === 0 ||
+      files.every((file) => this.app.metadataCache.getFileCache(file) !== null)
+    ) {
+      return;
+    }
+
+    await new Promise<void>((resolve) => {
+      let finished = false;
+      let eventRef: EventRef | null = null;
+
+      const finish = (): void => {
+        if (finished) return;
+        finished = true;
+        window.clearTimeout(timeout);
+
+        if (eventRef) {
+          this.app.metadataCache.offref(eventRef);
+        }
+
+        resolve();
+      };
+
+      eventRef = this.app.metadataCache.on("resolved", finish);
+      const timeout = window.setTimeout(finish, timeoutMs);
+    });
   }
 
   async rebuildRelationshipIndex(): Promise<void> {

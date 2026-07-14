@@ -4,6 +4,7 @@ export interface WeightedRelationshipGraphSettings {
   recencyHalfLifeDays: number;
   enabledRuleIds: string[];
   nodeSizeScale: number;
+  minimumEdgeThickness: number;
   maximumEdgeThickness: number;
 }
 export const DEFAULT_SETTINGS: WeightedRelationshipGraphSettings = {
@@ -12,5 +13,6 @@ export const DEFAULT_SETTINGS: WeightedRelationshipGraphSettings = {
   recencyHalfLifeDays: 90,
   enabledRuleIds: ["shared-context", "direct-link"],
   nodeSizeScale: 1,
+  minimumEdgeThickness: 0.75,
   maximumEdgeThickness: 6,
 };

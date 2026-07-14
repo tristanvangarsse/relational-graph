@@ -111,6 +111,29 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
           });
       });
     new Setting(containerEl)
+      .setName("Minimum edge thickness")
+      .setDesc(
+        "Set the thickness of the weakest visible relationship. Stronger relationships are scaled between this value and the maximum edge thickness.",
+      )
+      .addSlider((slider) => {
+        slider
+          .setLimits(0.1, 10, 0.1)
+          .setValue(this.plugin.settings.minimumEdgeThickness)
+          .setDynamicTooltip()
+          .onChange(async (value) => {
+            this.plugin.settings.minimumEdgeThickness = value;
+
+            if (
+              this.plugin.settings.maximumEdgeThickness < value
+            ) {
+              this.plugin.settings.maximumEdgeThickness = value;
+            }
+
+            await this.plugin.saveSettings();
+            this.display();
+          });
+      });
+    new Setting(containerEl)
       .setName("Maximum edge thickness")
       .setDesc(
         "Set the thickness of the strongest visible relationship. All other edges are scaled proportionally from it using their raw evidence count.",
@@ -122,7 +145,15 @@ export class WeightedRelationshipGraphSettingTab extends PluginSettingTab {
           .setDynamicTooltip()
           .onChange(async (value) => {
             this.plugin.settings.maximumEdgeThickness = value;
+
+            if (
+              this.plugin.settings.minimumEdgeThickness > value
+            ) {
+              this.plugin.settings.minimumEdgeThickness = value;
+            }
+
             await this.plugin.saveSettings();
+            this.display();
           });
       });
     new Setting(containerEl)

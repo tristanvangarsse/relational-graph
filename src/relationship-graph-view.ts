@@ -5,27 +5,37 @@ import {
   WorkspaceLeaf,
 } from "obsidian";
 import { UndirectedGraph } from "graphology";
-import FA2Layout from "graphology-layout-forceatlas2/worker";
+import ForceSupervisor from "graphology-layout-force/worker";
 import Sigma from "sigma";
 
 import { RELATIONSHIP_GRAPH_VIEW_TYPE } from "./constants";
 import type WeightedRelationshipGraphPlugin from "./main";
 import type {
   GraphFilters,
-  Relationship,
   ScanResult,
 } from "./types";
 
+const ACTIVE_COLOR = "#4f9cff";
+const INITIAL_LAYOUT_MAX_MS = 10_000;
+const FIRST_HOP_DRAG_CARRY = 0.16;
+const SECOND_HOP_DRAG_CARRY = 0.04;
+
 export class RelationshipGraphView extends ItemView {
   private renderer: Sigma | null = null;
-  private layout: FA2Layout | null = null;
+  private layout: ForceSupervisor | null = null;
+  private layoutStopTimer: number | null = null;
 
   private graphContainerEl: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
-  private detailsEl: HTMLElement | null = null;
   private filterControlsEl: HTMLElement | null = null;
+  private settingsPanelEl: HTMLElement | null = null;
 
   private physicsButton: ButtonComponent | null = null;
+  private physicsEnabled = true;
+  private focusedNode: string | null = null;
+  private focusedNeighbors = new Set<string>();
+  private focusedEdges = new Set<string>();
+
   private filters: GraphFilters;
 
   constructor(
@@ -60,48 +70,6 @@ export class RelationshipGraphView extends ItemView {
     this.contentEl.empty();
     this.contentEl.addClass("relationship-graph-view");
 
-    const toolbarEl = this.contentEl.createDiv({
-      cls: "relationship-graph-toolbar",
-    });
-
-    new ButtonComponent(toolbarEl)
-      .setButtonText("Refresh")
-      .setTooltip("Rebuild the full index")
-      .onClick(async () => {
-        await this.plugin.rebuildRelationshipIndex();
-      });
-
-    new ButtonComponent(toolbarEl)
-      .setButtonText("Re-layout")
-      .setTooltip("Randomize positions and run the graph layout again")
-      .onClick(() => {
-        this.randomizeNodePositions();
-        this.startLayout();
-      });
-
-    this.physicsButton = new ButtonComponent(toolbarEl)
-      .setButtonText("Pause physics")
-      .setTooltip("Pause or resume graph physics")
-      .onClick(() => {
-        this.togglePhysics();
-      });
-
-    new ButtonComponent(toolbarEl)
-      .setButtonText("Reset camera")
-      .setTooltip("Center the graph")
-      .onClick(() => {
-        this.renderer?.getCamera().animatedReset();
-      });
-
-    this.statusEl = toolbarEl.createDiv({
-      cls: "relationship-graph-status",
-      text: "Preparing graph…",
-    });
-
-    this.filterControlsEl = this.contentEl.createDiv({
-      cls: "relationship-graph-filters",
-    });
-
     const bodyEl = this.contentEl.createDiv({
       cls: "relationship-graph-body",
     });
@@ -110,12 +78,110 @@ export class RelationshipGraphView extends ItemView {
       cls: "relationship-graph-canvas",
     });
 
-    this.detailsEl = bodyEl.createDiv({
-      cls: "relationship-graph-details",
+    const statusBarEl = bodyEl.createDiv({
+      cls: "relationship-graph-floating-status",
     });
 
-    this.showDefaultDetails();
+    this.statusEl = statusBarEl.createDiv({
+      cls: "relationship-graph-status",
+      text: "Preparing graph…",
+    });
+
+    const controlsEl = bodyEl.createDiv({
+      cls: "relationship-graph-floating-controls",
+    });
+
+    const settingsButton = new ButtonComponent(controlsEl)
+      .setIcon("settings")
+      .setTooltip("Graph controls and filters");
+
+    settingsButton.buttonEl.addClass("clickable-icon");
+    settingsButton.onClick(() => {
+      const panel = this.settingsPanelEl;
+      if (!panel) {
+        return;
+      }
+
+      const isOpen = panel.hasClass("is-open");
+      panel.toggleClass("is-open", !isOpen);
+      panel.setAttribute("aria-hidden", String(isOpen));
+      settingsButton.buttonEl.toggleClass("is-active", !isOpen);
+    });
+
+    this.settingsPanelEl = bodyEl.createDiv({
+      cls: "relationship-graph-settings-panel",
+      attr: { "aria-hidden": "true" },
+    });
+
+    const graphControls = this.createSettingsSection(
+      this.settingsPanelEl,
+      "Graph controls",
+      true,
+    );
+
+    new ButtonComponent(graphControls)
+      .setButtonText("Refresh")
+      .setTooltip("Rebuild the full index")
+      .onClick(async () => {
+        await this.plugin.rebuildRelationshipIndex();
+      });
+
+    new ButtonComponent(graphControls)
+      .setButtonText("Re-layout")
+      .setTooltip("Randomize positions and settle the graph again")
+      .onClick(() => {
+        this.randomizeNodePositions();
+        this.wakePhysics(INITIAL_LAYOUT_MAX_MS);
+      });
+
+    this.physicsButton = new ButtonComponent(graphControls)
+      .setButtonText("Pause physics")
+      .setTooltip("Disable or enable automatic graph physics")
+      .onClick(() => {
+        this.physicsEnabled = !this.physicsEnabled;
+
+        if (this.physicsEnabled) {
+          this.wakePhysics(INITIAL_LAYOUT_MAX_MS);
+        } else {
+          this.stopLayout();
+        }
+
+        this.updatePhysicsButton();
+      });
+
+    new ButtonComponent(graphControls)
+      .setButtonText("Reset camera")
+      .setTooltip("Center the graph")
+      .onClick(() => {
+        this.renderer?.getCamera().animatedReset();
+      });
+
+    this.filterControlsEl = this.createSettingsSection(
+      this.settingsPanelEl,
+      "Filters",
+      true,
+    );
+
+    await this.plugin.ensureRelationshipIndexReady();
+    await this.waitForContainerLayout();
     await this.refresh();
+  }
+
+  private createSettingsSection(
+    parent: HTMLElement,
+    title: string,
+    open: boolean,
+  ): HTMLElement {
+    const section = parent.createEl("details", {
+      cls: "relationship-graph-settings-section",
+    });
+
+    section.open = open;
+    section.createEl("summary", { text: title });
+
+    return section.createDiv({
+      cls: "relationship-graph-settings-section-content",
+    });
   }
 
   async onClose(): Promise<void> {
@@ -124,8 +190,8 @@ export class RelationshipGraphView extends ItemView {
     this.physicsButton = null;
     this.graphContainerEl = null;
     this.statusEl = null;
-    this.detailsEl = null;
     this.filterControlsEl = null;
+    this.settingsPanelEl = null;
   }
 
   async refresh(): Promise<void> {
@@ -143,7 +209,6 @@ export class RelationshipGraphView extends ItemView {
       this.renderResult(result);
     } catch (error) {
       console.error("Relational graph scan failed", error);
-
       this.statusEl.setText("Graph update failed");
 
       new Notice(
@@ -158,7 +223,6 @@ export class RelationshipGraphView extends ItemView {
     }
 
     this.filterControlsEl.empty();
-
     this.createSearch(this.filterControlsEl);
 
     this.createNumberFilter(
@@ -176,10 +240,7 @@ export class RelationshipGraphView extends ItemView {
       "Folder",
       this.filters.folder,
       [
-        {
-          value: "",
-          label: "All folders",
-        },
+        { value: "", label: "All folders" },
         ...result.filterOptions.folders.map((folder) => ({
           value: folder,
           label: folder,
@@ -195,10 +256,7 @@ export class RelationshipGraphView extends ItemView {
       "Rule",
       this.filters.ruleId,
       [
-        {
-          value: "",
-          label: "All rules",
-        },
+        { value: "", label: "All rules" },
         ...result.filterOptions.ruleIds.map((rule) => ({
           value: rule.id,
           label: rule.label,
@@ -214,10 +272,7 @@ export class RelationshipGraphView extends ItemView {
       "Project",
       this.filters.project,
       [
-        {
-          value: "",
-          label: "All projects",
-        },
+        { value: "", label: "All projects" },
         ...result.filterOptions.projects.map((project) => ({
           value: project,
           label: project,
@@ -233,26 +288,11 @@ export class RelationshipGraphView extends ItemView {
       "Recency",
       String(this.filters.recentDays),
       [
-        {
-          value: "0",
-          label: "Any time",
-        },
-        {
-          value: "7",
-          label: "Last 7 days",
-        },
-        {
-          value: "30",
-          label: "Last 30 days",
-        },
-        {
-          value: "90",
-          label: "Last 90 days",
-        },
-        {
-          value: "365",
-          label: "Last year",
-        },
+        { value: "0", label: "Any time" },
+        { value: "7", label: "Last 7 days" },
+        { value: "30", label: "Last 30 days" },
+        { value: "90", label: "Last 90 days" },
+        { value: "365", label: "Last year" },
       ],
       (value) => {
         this.filters.recentDays = Number(value);
@@ -283,9 +323,7 @@ export class RelationshipGraphView extends ItemView {
       cls: "relationship-graph-filter",
     });
 
-    label.createSpan({
-      text: "Search",
-    });
+    label.createSpan({ text: "Search" });
 
     const input = label.createEl("input", {
       type: "search",
@@ -293,7 +331,6 @@ export class RelationshipGraphView extends ItemView {
     });
 
     input.value = this.filters.searchQuery;
-
     let timer: number | null = null;
 
     input.addEventListener("input", () => {
@@ -319,9 +356,7 @@ export class RelationshipGraphView extends ItemView {
       cls: "relationship-graph-filter relationship-graph-filter-number",
     });
 
-    label.createSpan({
-      text,
-    });
+    label.createSpan({ text });
 
     const input = label.createEl("input", {
       type: "number",
@@ -341,20 +376,14 @@ export class RelationshipGraphView extends ItemView {
     parent: HTMLElement,
     text: string,
     value: string,
-    options: Array<{
-      value: string;
-      label: string;
-    }>,
+    options: Array<{ value: string; label: string }>,
     apply: (value: string) => void,
   ): void {
     const label = parent.createEl("label", {
       cls: "relationship-graph-filter",
     });
 
-    label.createSpan({
-      text,
-    });
-
+    label.createSpan({ text });
     const select = label.createEl("select");
 
     for (const option of options) {
@@ -395,18 +424,20 @@ export class RelationshipGraphView extends ItemView {
         text: "No relationships match the current filters.",
       });
 
-      this.showDefaultDetails();
       this.updatePhysicsButton();
       return;
     }
 
     const graph = new UndirectedGraph();
+    const darkTheme = this.isDarkTheme();
 
-    const edgeColor = this.readCssColor(
-      "--text-faint",
-      "#888888",
-    );
+    const labelColor = darkTheme
+      ? "#f7f7f7"
+      : "#17191c";
 
+    const edgeColor = darkTheme
+      ? "rgba(185, 192, 202, 0.38)"
+      : "rgba(70, 76, 84, 0.28)";
     const degree = new Map<string, number>();
 
     for (const relationship of data.relationships) {
@@ -414,7 +445,6 @@ export class RelationshipGraphView extends ItemView {
         relationship.source,
         (degree.get(relationship.source) ?? 0) + 1,
       );
-
       degree.set(
         relationship.target,
         (degree.get(relationship.target) ?? 0) + 1,
@@ -422,58 +452,39 @@ export class RelationshipGraphView extends ItemView {
     }
 
     const nodeCount = Math.max(data.nodes.length, 1);
-    const initialRadius = Math.max(
-      20,
-      Math.sqrt(nodeCount) * 12,
-    );
+    const initialRadius = Math.max(14, Math.sqrt(nodeCount) * 5.5);
 
     data.nodes.forEach((node, index) => {
       const nodeDegree = degree.get(node.id) ?? 0;
-
       const isProjectFocused =
         this.filters.project !== "" &&
         node.projects.includes(this.filters.project);
-
-      const angle = (index / nodeCount) * Math.PI * 2;
-      const jitter = 4;
+      const angle = index * 2.399963229728653;
+      const radius = initialRadius * Math.sqrt((index + 0.5) / nodeCount);
+      const jitter = 2;
+      const size =
+        (5 +
+          Math.sqrt(nodeDegree + 1) * 2.5 +
+          (isProjectFocused ? 2 : 0)) *
+        this.plugin.settings.nodeSizeScale;
 
       graph.addNode(node.id, {
         label: node.label,
         filePath: node.filePath,
-
         x:
-          Math.cos(angle) * initialRadius +
+          Math.cos(angle) * radius +
           (Math.random() - 0.5) * jitter,
-
         y:
-          Math.sin(angle) * initialRadius +
+          Math.sin(angle) * radius +
           (Math.random() - 0.5) * jitter,
-
-        size:
-          (5 +
-            Math.sqrt(nodeDegree + 1) * 2.5 +
-            (isProjectFocused ? 2 : 0)) *
-          this.plugin.settings.nodeSizeScale,
-
-        color: this.nodeColor(
-          node.folder,
-          isProjectFocused,
-        ),
-
+        size,
+        baseSize: size,
+        color: this.nodeColor(node.folder, isProjectFocused),
         forceLabel: isProjectFocused,
         fixed: false,
-        highlighted: false,
       });
     });
 
-    /*
-     * Edge thickness is normalized against the strongest visible
-     * relationship in the current filtered graph.
-     *
-     * For example, if the largest raw weight is 3:
-     * rawWeight 3 receives 100% of maximumEdgeThickness.
-     * rawWeight 1 receives 33.3% of maximumEdgeThickness.
-     */
     const maximumRawWeight = Math.max(
       1,
       ...data.relationships.map((relationship) =>
@@ -494,35 +505,19 @@ export class RelationshipGraphView extends ItemView {
         continue;
       }
 
-      /*
-       * Physics attraction remains based on weighted relationship
-       * strength. Visual edge thickness is calculated separately.
-       */
-      const physicsWeight = Math.max(
-        0.25,
-        Math.min(
-          4,
-          Math.sqrt(Math.max(relationship.weight, 0)),
-        ),
-      );
-
       const normalizedWeight =
-        Math.max(0, relationship.rawWeight) /
-        maximumRawWeight;
-
+        Math.max(0, relationship.rawWeight) / maximumRawWeight;
       const edgeSize =
-        maximumEdgeThickness *
-        Math.pow(normalizedWeight, 2);
+        maximumEdgeThickness * Math.pow(normalizedWeight, 2);
 
       graph.addEdgeWithKey(
         relationship.id,
         relationship.source,
         relationship.target,
         {
-          weight: physicsWeight,
-          relationshipWeight: relationship.weight,
-          rawWeight: relationship.rawWeight,
+          weight: Math.max(0.25, relationship.weight),
           size: edgeSize,
+          baseSize: edgeSize,
           color: edgeColor,
           label: relationship.weight.toFixed(2),
           relationship,
@@ -530,20 +525,71 @@ export class RelationshipGraphView extends ItemView {
       );
     }
 
-    this.renderer = new Sigma(
-      graph,
-      this.graphContainerEl,
-      {
-        labelRenderedSizeThreshold: 7,
-        renderEdgeLabels: false,
-        enableEdgeEvents: true,
-        defaultEdgeColor: edgeColor,
-        defaultEdgeType: "line",
-      },
-    );
+    this.connectDisconnectedComponentsForLayout(graph);
+
+    this.renderer = new Sigma(graph, this.graphContainerEl, {
+      labelRenderedSizeThreshold: 4,
+      renderEdgeLabels: false,
+      enableEdgeEvents: true,
+      defaultEdgeColor: edgeColor,
+      defaultEdgeType: "line",
+      labelColor: { color: labelColor },
+      defaultDrawNodeHover: () => undefined,
+      minCameraRatio: 0.05,
+      maxCameraRatio: 20,
+      zoomingRatio: 1.25,
+      zoomDuration: 300,
+      nodeReducer: (node, attributes) =>
+        this.reduceNode(node, attributes),
+      edgeReducer: (edge, attributes) =>
+        this.reduceEdge(edge, attributes),
+    });
 
     this.registerRendererInteractions(graph);
-    this.startLayout();
+    this.createLayout(graph);
+    this.wakePhysics(INITIAL_LAYOUT_MAX_MS);
+    this.scheduleInitialRender();
+  }
+
+  private createLayout(graph: UndirectedGraph): void {
+    this.layout?.kill();
+
+    const graphSize = graph.order;
+    const repulsion =
+      graphSize > 1_000
+        ? 0.006
+        : graphSize > 400
+          ? 0.009
+          : 0.012;
+
+    const attraction =
+      graphSize > 1_000
+        ? 0.0011
+        : graphSize > 400
+          ? 0.0014
+          : 0.0018;
+
+    const gravity =
+      graphSize > 1_000
+        ? 0.00012
+        : graphSize > 400
+          ? 0.00018
+          : 0.00025;
+
+    this.layout = new ForceSupervisor(graph, {
+      isNodeFixed: "fixed",
+      settings: {
+        attraction,
+        repulsion,
+        gravity,
+        inertia: 0.001,
+        maxMove: graphSize > 1_000 ? 55 : graphSize > 400 ? 80 : 110,
+      },
+      onConverged: () => {
+        this.clearLayoutStopTimer();
+        this.updatePhysicsButton();
+      },
+    });
   }
 
   private registerRendererInteractions(
@@ -556,6 +602,7 @@ export class RelationshipGraphView extends ItemView {
     let draggedNode: string | null = null;
     let movedDuringDrag = false;
     let suppressClickNode: string | null = null;
+    let previousDragPosition: { x: number; y: number } | null = null;
 
     this.renderer.on("clickNode", ({ node }) => {
       if (suppressClickNode === node) {
@@ -563,89 +610,52 @@ export class RelationshipGraphView extends ItemView {
         return;
       }
 
-      const filePath = graph.getNodeAttribute(
-        node,
-        "filePath",
-      ) as string;
-
-      void this.app.workspace.openLinkText(
-        filePath,
-        "",
-        "tab",
-      );
-    });
-
-    this.renderer.on("clickEdge", ({ edge }) => {
-      const relationship = graph.getEdgeAttribute(
-        edge,
-        "relationship",
-      ) as Relationship;
-
-      this.showRelationshipDetails(
-        relationship,
-        graph.getNodeAttribute(
-          relationship.source,
-          "label",
-        ) as string,
-        graph.getNodeAttribute(
-          relationship.target,
-          "label",
-        ) as string,
-      );
+      const filePath = graph.getNodeAttribute(node, "filePath") as string;
+      void this.app.workspace.openLinkText(filePath, "", "tab");
     });
 
     this.renderer.on("enterNode", ({ node }) => {
-      graph.setNodeAttribute(
-        node,
-        "highlighted",
-        true,
-      );
+      if (draggedNode === null) {
+        this.setFocus(graph, node);
+      }
 
       if (this.graphContainerEl) {
-        this.graphContainerEl.style.cursor = "pointer";
+        this.graphContainerEl.style.cursor = "grab";
       }
     });
 
-    this.renderer.on("leaveNode", ({ node }) => {
-      if (draggedNode !== node) {
-        graph.setNodeAttribute(
-          node,
-          "highlighted",
-          false,
-        );
+    this.renderer.on("leaveNode", () => {
+      if (draggedNode === null) {
+        this.clearFocus();
       }
 
-      if (
-        this.graphContainerEl &&
-        draggedNode === null
-      ) {
+      if (this.graphContainerEl && draggedNode === null) {
         this.graphContainerEl.style.cursor = "default";
       }
     });
 
-    this.renderer.on("downNode", ({ node }) => {
+    this.renderer.on("downNode", ({ node, event }) => {
       draggedNode = node;
       movedDuringDrag = false;
 
       graph.setNodeAttribute(node, "fixed", true);
-      graph.setNodeAttribute(
-        node,
-        "highlighted",
-        true,
-      );
-
-      if (!this.layout?.isRunning()) {
-        this.layout?.start();
-        this.updatePhysicsButton();
-      }
+      previousDragPosition = {
+        x: Number(graph.getNodeAttribute(node, "x")),
+        y: Number(graph.getNodeAttribute(node, "y")),
+      };
+      this.setFocus(graph, node);
+      this.wakePhysics(0);
 
       if (!this.renderer?.getCustomBBox()) {
         const box = this.renderer?.getBBox();
-
         if (box) {
           this.renderer?.setCustomBBox(box);
         }
       }
+
+      event.preventSigmaDefault();
+      event.original.preventDefault();
+      event.original.stopPropagation();
 
       if (this.graphContainerEl) {
         this.graphContainerEl.style.cursor = "grabbing";
@@ -658,21 +668,23 @@ export class RelationshipGraphView extends ItemView {
       }
 
       movedDuringDrag = true;
+      const position = this.renderer.viewportToGraph(event);
 
-      const position =
-        this.renderer.viewportToGraph(event);
+      if (previousDragPosition) {
+        this.carryConnectedNodes(
+          graph,
+          draggedNode,
+          position.x - previousDragPosition.x,
+          position.y - previousDragPosition.y,
+        );
+      }
 
-      graph.setNodeAttribute(
-        draggedNode,
-        "x",
-        position.x,
-      );
+      graph.mergeNodeAttributes(draggedNode, {
+        x: position.x,
+        y: position.y,
+      });
 
-      graph.setNodeAttribute(
-        draggedNode,
-        "y",
-        position.y,
-      );
+      previousDragPosition = position;
 
       event.preventSigmaDefault();
       event.original.preventDefault();
@@ -685,22 +697,12 @@ export class RelationshipGraphView extends ItemView {
       }
 
       const releasedNode = draggedNode;
-
-      graph.setNodeAttribute(
-        releasedNode,
-        "highlighted",
-        false,
-      );
-
-      graph.setNodeAttribute(
-        releasedNode,
-        "fixed",
-        false,
-      );
+      // Keep the released node anchored at its drop point. The surrounding
+      // nodes remain free and settle around it through the spring forces.
+      graph.setNodeAttribute(releasedNode, "fixed", true);
 
       if (movedDuringDrag) {
         suppressClickNode = releasedNode;
-
         window.setTimeout(() => {
           if (suppressClickNode === releasedNode) {
             suppressClickNode = null;
@@ -710,6 +712,12 @@ export class RelationshipGraphView extends ItemView {
 
       draggedNode = null;
       movedDuringDrag = false;
+      previousDragPosition = null;
+      this.clearFocus();
+      this.renderer?.setCustomBBox(null);
+      // Let the spring simulation settle naturally. ForceSupervisor stops
+      // itself when it reaches convergence, avoiding an abrupt timed freeze.
+      this.wakePhysics(0);
 
       if (this.graphContainerEl) {
         this.graphContainerEl.style.cursor = "default";
@@ -720,207 +728,334 @@ export class RelationshipGraphView extends ItemView {
     this.renderer.on("upStage", finishDragging);
   }
 
-  private showRelationshipDetails(
-    relationship: Relationship,
-    sourceLabel: string,
-    targetLabel: string,
+
+  private connectDisconnectedComponentsForLayout(
+    graph: UndirectedGraph,
   ): void {
-    if (!this.detailsEl) {
+    const visited = new Set<string>();
+    const components: string[][] = [];
+
+    for (const startNode of graph.nodes()) {
+      if (visited.has(startNode)) {
+        continue;
+      }
+
+      const component: string[] = [];
+      const stack = [startNode];
+      visited.add(startNode);
+
+      while (stack.length > 0) {
+        const node = stack.pop();
+
+        if (node === undefined) {
+          continue;
+        }
+
+        component.push(node);
+
+        for (const neighbor of graph.neighbors(node)) {
+          if (!visited.has(neighbor)) {
+            visited.add(neighbor);
+            stack.push(neighbor);
+          }
+        }
+      }
+
+      components.push(component);
+    }
+
+    if (components.length <= 1) {
       return;
     }
 
-    this.detailsEl.empty();
+    components.sort((a, b) => b.length - a.length);
 
-    this.detailsEl.createEl("h3", {
-      text: `${sourceLabel} ↔ ${targetLabel}`,
-    });
+    for (let index = 1; index < components.length; index += 1) {
+      const previousComponent = components[index - 1];
+      const currentComponent = components[index];
 
-    this.detailsEl.createEl("p", {
-      text:
-        `Weighted strength: ` +
-        `${relationship.weight.toFixed(2)} · ` +
-        `Raw evidence: ${relationship.rawWeight}`,
-    });
+      if (!previousComponent || !currentComponent) {
+        continue;
+      }
 
-    if (relationship.projects.length > 0) {
-      this.detailsEl.createEl("p", {
-        text:
-          `Projects: ` +
-          relationship.projects.join(", "),
-      });
-    }
+      const { source, target } = this.findClosestNodePair(
+        graph,
+        previousComponent,
+        currentComponent,
+      );
 
-    this.detailsEl.createEl("h4", {
-      text: "Rule totals",
-    });
-
-    const ruleList = this.detailsEl.createEl("ul");
-
-    const sortedRuleTotals = Object.entries(
-      relationship.weightByRule,
-    ).sort(([firstRule], [secondRule]) =>
-      firstRule.localeCompare(secondRule),
-    );
-
-    for (const [ruleId, weight] of sortedRuleTotals) {
-      ruleList.createEl("li", {
-        text: `${ruleId}: ${weight.toFixed(2)}`,
-      });
-    }
-
-    this.detailsEl.createEl("h4", {
-      text: "Evidence",
-    });
-
-    const evidenceList =
-      this.detailsEl.createEl("ul");
-
-    const sortedEvidence = [
-      ...relationship.evidence,
-    ].sort(
-      (first, second) =>
-        second.timestamp - first.timestamp,
-    );
-
-    for (const evidence of sortedEvidence) {
-      const item = evidenceList.createEl("li");
-
-      const link = item.createEl("a", {
-        text: evidence.sourceNoteName,
-        href: "#",
-      });
-
-      item.createSpan({
-        text:
-          ` — ${evidence.ruleLabel}, ` +
-          `${evidence.weightedValue.toFixed(2)}, ` +
-          new Date(
-            evidence.timestamp,
-          ).toLocaleDateString(),
-      });
-
-      link.addEventListener("click", (event) => {
-        event.preventDefault();
-
-        void this.app.workspace.openLinkText(
-          evidence.sourceNotePath,
-          "",
-          "tab",
-        );
-      });
+      graph.addEdgeWithKey(
+        `__layout_component_${index}`,
+        source,
+        target,
+        {
+          layoutOnly: true,
+          hidden: true,
+          size: 0,
+          baseSize: 0,
+          color: "transparent",
+          label: "",
+        },
+      );
     }
   }
 
-  private showDefaultDetails(): void {
-    if (!this.detailsEl) {
+  private findClosestNodePair(
+    graph: UndirectedGraph,
+    firstComponent: string[],
+    secondComponent: string[],
+  ): { source: string; target: string } {
+    let source = firstComponent[0] as string;
+    let target = secondComponent[0] as string;
+    let shortestDistanceSquared = Number.POSITIVE_INFINITY;
+
+    for (const firstNode of firstComponent) {
+      const firstX = Number(graph.getNodeAttribute(firstNode, "x"));
+      const firstY = Number(graph.getNodeAttribute(firstNode, "y"));
+
+      for (const secondNode of secondComponent) {
+        const deltaX =
+          firstX - Number(graph.getNodeAttribute(secondNode, "x"));
+        const deltaY =
+          firstY - Number(graph.getNodeAttribute(secondNode, "y"));
+        const distanceSquared = deltaX * deltaX + deltaY * deltaY;
+
+        if (distanceSquared < shortestDistanceSquared) {
+          shortestDistanceSquared = distanceSquared;
+          source = firstNode;
+          target = secondNode;
+        }
+      }
+    }
+
+    return { source, target };
+  }
+
+  private realNeighbors(
+    graph: UndirectedGraph,
+    node: string,
+  ): string[] {
+    const neighbors: string[] = [];
+
+    for (const edge of graph.edges(node)) {
+      if (graph.getEdgeAttribute(edge, "layoutOnly") === true) {
+        continue;
+      }
+
+      const source = graph.source(edge);
+      const target = graph.target(edge);
+      neighbors.push(source === node ? target : source);
+    }
+
+    return neighbors;
+  }
+
+  private carryConnectedNodes(
+    graph: UndirectedGraph,
+    draggedNode: string,
+    deltaX: number,
+    deltaY: number,
+  ): void {
+    if (deltaX === 0 && deltaY === 0) {
       return;
     }
 
-    this.detailsEl.empty();
+    const firstHop = new Set(
+      this.realNeighbors(graph, draggedNode),
+    );
+    const secondHop = new Set<string>();
 
-    this.detailsEl.createEl("h3", {
-      text: "Relationship details",
-    });
+    for (const neighbor of firstHop) {
+      for (const candidate of this.realNeighbors(graph, neighbor)) {
+        if (candidate !== draggedNode && !firstHop.has(candidate)) {
+          secondHop.add(candidate);
+        }
+      }
+    }
 
-    this.detailsEl.createEl("p", {
-      text:
-        "Click an edge to inspect its rules, " +
-        "recency-adjusted strength, projects, " +
-        "and evidence notes.",
-    });
-  }
-
-  private nodeColor(
-    folder: string,
-    focused: boolean,
-  ): string {
-    if (focused) {
-      return this.readCssColor(
-        "--interactive-accent",
-        "#7f6df2",
+    for (const node of firstHop) {
+      this.translateFreeNode(
+        graph,
+        node,
+        deltaX * FIRST_HOP_DRAG_CARRY,
+        deltaY * FIRST_HOP_DRAG_CARRY,
       );
     }
 
-    const palette = [
-      "--color-blue",
-      "--color-cyan",
-      "--color-green",
-      "--color-orange",
-      "--color-pink",
-      "--color-purple",
-      "--color-red",
-      "--color-yellow",
-    ];
-
-    let hash = 0;
-
-    for (const character of folder || "root") {
-      hash =
-        ((hash << 5) -
-          hash +
-          character.charCodeAt(0)) |
-        0;
+    for (const node of secondHop) {
+      this.translateFreeNode(
+        graph,
+        node,
+        deltaX * SECOND_HOP_DRAG_CARRY,
+        deltaY * SECOND_HOP_DRAG_CARRY,
+      );
     }
-
-    const colorVariable =
-      palette[Math.abs(hash) % palette.length] ??
-      "--interactive-accent";
-
-    return this.readCssColor(
-      colorVariable,
-      "#7f6df2",
-    );
   }
 
-  private startLayout(): void {
-    if (!this.renderer) {
+  private translateFreeNode(
+    graph: UndirectedGraph,
+    node: string,
+    deltaX: number,
+    deltaY: number,
+  ): void {
+    if (Boolean(graph.getNodeAttribute(node, "fixed"))) {
       return;
     }
 
-    const graph = this.renderer.getGraph();
+    graph.mergeNodeAttributes(node, {
+      x: Number(graph.getNodeAttribute(node, "x")) + deltaX,
+      y: Number(graph.getNodeAttribute(node, "y")) + deltaY,
+    });
+  }
 
-    if (graph.order < 2) {
+  private setFocus(graph: UndirectedGraph, node: string): void {
+    this.focusedNode = node;
+    this.focusedNeighbors.clear();
+    this.focusedEdges.clear();
+
+    for (const edge of graph.edges(node)) {
+      if (graph.getEdgeAttribute(edge, "layoutOnly") === true) {
+        continue;
+      }
+
+      this.focusedEdges.add(edge);
+
+      const source = graph.source(edge);
+      const target = graph.target(edge);
+      this.focusedNeighbors.add(source === node ? target : source);
+    }
+
+    this.renderer?.refresh();
+  }
+
+  private clearFocus(): void {
+    if (this.focusedNode === null) {
+      return;
+    }
+
+    this.focusedNode = null;
+    this.focusedNeighbors.clear();
+    this.focusedEdges.clear();
+    this.renderer?.refresh();
+  }
+
+  private reduceNode(
+    node: string,
+    attributes: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (this.focusedNode === null) {
+      return attributes;
+    }
+
+    const isFocused = node === this.focusedNode;
+    const isNeighbor = this.focusedNeighbors.has(node);
+
+    if (isFocused) {
+      return {
+        ...attributes,
+        color: ACTIVE_COLOR,
+        size: Number(attributes.baseSize ?? attributes.size ?? 5) * 1.35,
+        forceLabel: true,
+        zIndex: 2,
+      };
+    }
+
+    if (isNeighbor) {
+      return {
+        ...attributes,
+        color: ACTIVE_COLOR,
+        size: Number(attributes.baseSize ?? attributes.size ?? 5) * 1.08,
+        forceLabel: true,
+        zIndex: 1,
+      };
+    }
+
+    return {
+      ...attributes,
+      color: this.dimmedNodeColor(),
+      size: Number(attributes.baseSize ?? attributes.size ?? 5) * 0.78,
+      forceLabel: false,
+      zIndex: 0,
+    };
+  }
+
+  private reduceEdge(
+    edge: string,
+    attributes: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (attributes.layoutOnly === true) {
+      return {
+        ...attributes,
+        hidden: true,
+        size: 0,
+        label: "",
+      };
+    }
+
+    if (this.focusedNode === null) {
+      return attributes;
+    }
+
+    if (this.focusedEdges.has(edge)) {
+      return {
+        ...attributes,
+        color: ACTIVE_COLOR,
+        size: Math.max(
+          1,
+          Number(attributes.baseSize ?? attributes.size ?? 1) * 1.2,
+        ),
+        zIndex: 1,
+      };
+    }
+
+    return {
+      ...attributes,
+      color: this.dimmedEdgeColor(),
+      size: Math.max(
+        0.15,
+        Number(attributes.baseSize ?? attributes.size ?? 1) * 0.35,
+      ),
+      zIndex: 0,
+    };
+  }
+
+  private wakePhysics(maxRunMs: number): void {
+    if (!this.physicsEnabled || !this.layout) {
       this.updatePhysicsButton();
       return;
     }
 
-    this.stopAndKillLayout();
+    this.clearLayoutStopTimer();
 
-    this.layout = new FA2Layout(graph, {
-      settings: {
-        adjustSizes: true,
-        barnesHutOptimize: graph.order > 250,
-        gravity: 0.8,
-        scalingRatio: 5,
-        slowDown: 10,
-        edgeWeightInfluence: 1,
-        linLogMode: true,
-        outboundAttractionDistribution: false,
-        strongGravityMode: false,
-      },
-    });
-
-    this.layout.start();
-    this.updatePhysicsButton();
-  }
-
-  private togglePhysics(): void {
-    if (!this.renderer) {
-      return;
-    }
-
-    if (!this.layout) {
-      this.startLayout();
-      return;
-    }
-
-    if (this.layout.isRunning()) {
-      this.layout.stop();
-    } else {
+    if (!this.layout.isRunning()) {
       this.layout.start();
     }
 
+    if (maxRunMs > 0) {
+      this.layoutStopTimer = window.setTimeout(() => {
+        this.layoutStopTimer = null;
+        this.stopLayout();
+      }, maxRunMs);
+    }
+
     this.updatePhysicsButton();
+  }
+
+  private stopLayout(): void {
+    this.clearLayoutStopTimer();
+
+    if (this.layout?.isRunning()) {
+      this.layout.stop();
+    }
+
+    this.updatePhysicsButton();
+  }
+
+  private clearLayoutStopTimer(): void {
+    if (this.layoutStopTimer !== null) {
+      window.clearTimeout(this.layoutStopTimer);
+      this.layoutStopTimer = null;
+    }
   }
 
   private updatePhysicsButton(): void {
@@ -928,20 +1063,57 @@ export class RelationshipGraphView extends ItemView {
       return;
     }
 
-    const isRunning =
-      this.layout?.isRunning() ?? false;
+    if (!this.physicsEnabled) {
+      this.physicsButton
+        .setButtonText("Resume physics")
+        .setTooltip("Enable automatic graph physics");
+      return;
+    }
 
-    this.physicsButton.setButtonText(
-      isRunning
-        ? "Pause physics"
-        : "Resume physics",
-    );
+    const running = this.layout?.isRunning() ?? false;
 
-    this.physicsButton.setTooltip(
-      isRunning
-        ? "Pause graph physics"
-        : "Resume graph physics",
-    );
+    this.physicsButton
+      .setButtonText(running ? "Pause physics" : "Physics ready")
+      .setTooltip(
+        running
+          ? "Pause graph physics"
+          : "Physics is enabled and will wake on interaction",
+      );
+  }
+
+
+  private scheduleInitialRender(): void {
+    const renderer = this.renderer;
+
+    window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(() => {
+        if (!renderer || renderer !== this.renderer) {
+          return;
+        }
+
+        renderer.resize();
+        renderer.refresh();
+        renderer.getCamera().animatedReset({ duration: 0 });
+      });
+    });
+  }
+
+  private async waitForContainerLayout(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  }
+
+  private isDarkTheme(): boolean {
+    return document.body.classList.contains("theme-dark");
+  }
+
+  private dimmedNodeColor(): string {
+    return this.isDarkTheme() ? "#606874" : "#a0a6ad";
+  }
+
+  private dimmedEdgeColor(): string {
+    return this.isDarkTheme() ? "#68717d" : "#c2c7cd";
   }
 
   private randomizeNodePositions(): void {
@@ -956,24 +1128,18 @@ export class RelationshipGraphView extends ItemView {
       return;
     }
 
-    const radius = Math.max(
-      20,
-      Math.sqrt(nodes.length) * 12,
-    );
+    const radius = Math.max(20, Math.sqrt(nodes.length) * 12);
 
     nodes.forEach((node, index) => {
-      const angle =
-        (index / nodes.length) * Math.PI * 2;
+      const angle = (index / nodes.length) * Math.PI * 2;
 
       graph.mergeNodeAttributes(node, {
         x:
           Math.cos(angle) * radius +
           (Math.random() - 0.5) * 8,
-
         y:
           Math.sin(angle) * radius +
           (Math.random() - 0.5) * 8,
-
         fixed: false,
       });
     });
@@ -981,28 +1147,45 @@ export class RelationshipGraphView extends ItemView {
     this.renderer.getCamera().animatedReset();
   }
 
-  private stopAndKillLayout(): void {
-    if (!this.layout) {
-      this.updatePhysicsButton();
-      return;
+  private nodeColor(folder: string, focused: boolean): string {
+    if (focused) {
+      return this.readCssColor("--interactive-accent", "#7f6df2");
     }
 
-    if (this.layout.isRunning()) {
-      this.layout.stop();
+    const palette = [
+      "--color-blue",
+      "--color-cyan",
+      "--color-green",
+      "--color-orange",
+      "--color-pink",
+      "--color-purple",
+      "--color-red",
+      "--color-yellow",
+    ];
+
+    let hash = 0;
+    for (const character of folder || "root") {
+      hash = ((hash << 5) - hash + character.charCodeAt(0)) | 0;
     }
 
-    this.layout.kill();
-    this.layout = null;
+    const colorVariable =
+      palette[Math.abs(hash) % palette.length] ??
+      "--interactive-accent";
 
-    this.updatePhysicsButton();
+    return this.readCssColor(colorVariable, "#7f6df2");
   }
 
   private destroyGraph(): void {
-    this.stopAndKillLayout();
+    this.clearLayoutStopTimer();
+    this.layout?.kill();
+    this.layout = null;
 
     this.renderer?.kill();
     this.renderer = null;
 
+    this.focusedNode = null;
+    this.focusedNeighbors.clear();
+    this.focusedEdges.clear();
     this.updatePhysicsButton();
   }
 
