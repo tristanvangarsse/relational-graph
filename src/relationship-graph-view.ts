@@ -153,7 +153,7 @@ export class RelationshipGraphView extends ItemView {
       .setButtonText("Reset camera")
       .setTooltip("Center the graph")
       .onClick(() => {
-        this.renderer?.getCamera().animatedReset();
+        void this.renderer?.getCamera().animatedReset();
       });
 
     this.filterControlsEl = this.createSettingsSection(
@@ -620,7 +620,8 @@ export class RelationshipGraphView extends ItemView {
       }
 
       if (this.graphContainerEl) {
-        this.graphContainerEl.style.cursor = "grab";
+        this.graphContainerEl.removeClass("is-dragging");
+        this.graphContainerEl.addClass("is-node-hovered");
       }
     });
 
@@ -630,7 +631,7 @@ export class RelationshipGraphView extends ItemView {
       }
 
       if (this.graphContainerEl && draggedNode === null) {
-        this.graphContainerEl.style.cursor = "default";
+        this.graphContainerEl.removeClass("is-node-hovered", "is-dragging");
       }
     });
 
@@ -658,7 +659,8 @@ export class RelationshipGraphView extends ItemView {
       event.original.stopPropagation();
 
       if (this.graphContainerEl) {
-        this.graphContainerEl.style.cursor = "grabbing";
+        this.graphContainerEl.removeClass("is-node-hovered");
+        this.graphContainerEl.addClass("is-dragging");
       }
     });
 
@@ -720,7 +722,7 @@ export class RelationshipGraphView extends ItemView {
       this.wakePhysics(0);
 
       if (this.graphContainerEl) {
-        this.graphContainerEl.style.cursor = "default";
+        this.graphContainerEl.removeClass("is-node-hovered", "is-dragging");
       }
     };
 
@@ -898,7 +900,7 @@ export class RelationshipGraphView extends ItemView {
     deltaX: number,
     deltaY: number,
   ): void {
-    if (Boolean(graph.getNodeAttribute(node, "fixed"))) {
+    if (graph.getNodeAttribute(node, "fixed")) {
       return;
     }
 
@@ -1093,7 +1095,7 @@ export class RelationshipGraphView extends ItemView {
 
         renderer.resize();
         renderer.refresh();
-        renderer.getCamera().animatedReset({ duration: 0 });
+        void renderer.getCamera().animatedReset({ duration: 0 });
       });
     });
   }
@@ -1144,7 +1146,7 @@ export class RelationshipGraphView extends ItemView {
       });
     });
 
-    this.renderer.getCamera().animatedReset();
+    void this.renderer.getCamera().animatedReset();
   }
 
   private nodeColor(folder: string, focused: boolean): string {

@@ -25,6 +25,14 @@
     background: var(--background-primary);
 }
 
+.relationship-graph-canvas.is-node-hovered {
+    cursor: grab;
+}
+
+.relationship-graph-canvas.is-dragging {
+    cursor: grabbing;
+}
+
 .relationship-graph-floating-controls {
     position: absolute;
     top: 10px;
