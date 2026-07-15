@@ -1,6 +1,6 @@
 # Relational Graph
 
-Relational Graph visualizes connections between notes based on shared context and direct links.
+Relational Graph is an Obsidian plugin that visualizes connections between notes based on shared context and direct links.
 
 ## Features
 
