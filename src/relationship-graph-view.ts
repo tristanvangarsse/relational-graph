@@ -456,8 +456,8 @@ export class RelationshipGraphView extends ItemView {
       : "#17191c";
 
     const edgeColor = darkTheme
-      ? "rgba(185, 192, 202, 0.45)"
-      : "rgba(45, 50, 58, 0.55)";
+      ? "#747b85"
+      : "#b5bac1";
     const degree = new Map<string, number>();
 
     for (const relationship of data.relationships) {
@@ -1166,7 +1166,7 @@ export class RelationshipGraphView extends ItemView {
   }
 
   private dimmedEdgeColor(): string {
-    return this.isDarkTheme() ? "#68717d" : "#8f969e";
+    return this.isDarkTheme() ? "#68717d" : "#d0d3d7";
   }
 
   private randomizeNodePositions(): void {
