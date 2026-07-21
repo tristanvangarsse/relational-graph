@@ -1,10 +1,10 @@
 {
-    "id": "relational-graph",
-    "name": "Relational Graph",
-    "version": "1.1.0",
-    "minAppVersion": "1.7.2",
-    "description": "Visualize relationships between notes using shared context, direct links, recency, filters, and project focus.",
-    "author": "Tristan Van Garsse",
-    "authorUrl": "https://github.com/tristanvangarsse",
-    "isDesktopOnly": false
+	"id": "relational-graph",
+	"name": "Relational Graph",
+	"version": "1.1.1",
+	"minAppVersion": "1.7.2",
+	"description": "Visualize relationships between notes using shared context, direct links, recency, filters, and project focus.",
+	"author": "Tristan Van Garsse",
+	"authorUrl": "https://github.com/tristanvangarsse",
+	"isDesktopOnly": false
 }
