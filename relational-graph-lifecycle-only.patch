@@ -1,0 +1,81 @@
+diff --git a/src/relationship-graph-view.ts b/src/relationship-graph-view.ts
+index 7dfe36c..2769a47 100644
+--- a/src/relationship-graph-view.ts
++++ b/src/relationship-graph-view.ts
+@@ -162,8 +162,23 @@ export class RelationshipGraphView extends ItemView {
+       true,
+     );
+ 
++    /*
++     * setViewState() waits for onOpen() before activateView() can reveal the
++     * new leaf. Rendering Sigma here synchronously can therefore see a
++     * zero-sized container and fail on the first open. Let onOpen() finish,
++     * then initialize once Obsidian has revealed and sized the view.
++     */
++    void this.initializeGraphWhenVisible();
++  }
++
++  private async initializeGraphWhenVisible(): Promise<void> {
+     await this.plugin.ensureRelationshipIndexReady();
+-    await this.waitForContainerLayout();
++
++    const hasLayout = await this.waitForContainerLayout(2_500);
++    if (!hasLayout || !this.graphContainerEl || !this.statusEl) {
++      return;
++    }
++
+     await this.refresh();
+   }
+ 
+@@ -199,6 +214,11 @@ export class RelationshipGraphView extends ItemView {
+       return;
+     }
+ 
++    if (!this.hasContainerLayout()) {
++      this.statusEl.setText("Waiting for graph view…");
++      return;
++    }
++
+     this.statusEl.setText("Updating graph…");
+ 
+     try {
+@@ -1106,10 +1126,35 @@ export class RelationshipGraphView extends ItemView {
+     });
+   }
+ 
+-  private async waitForContainerLayout(): Promise<void> {
+-    await new Promise<void>((resolve) => {
+-      window.requestAnimationFrame(() => resolve());
+-    });
++  private hasContainerLayout(): boolean {
++    const container = this.graphContainerEl;
++
++    return Boolean(
++      container &&
++      container.isConnected &&
++      container.clientWidth > 0 &&
++      container.clientHeight > 0
++    );
++  }
++
++  private async waitForContainerLayout(timeoutMs: number): Promise<boolean> {
++    const start = window.performance.now();
++
++    while (this.graphContainerEl && this.statusEl) {
++      if (this.hasContainerLayout()) {
++        return true;
++      }
++
++      if (window.performance.now() - start >= timeoutMs) {
++        return false;
++      }
++
++      await new Promise<void>((resolve) => {
++        window.requestAnimationFrame(() => resolve());
++      });
++    }
++
++    return false;
+   }
+ 
+   private isDarkTheme(): boolean {

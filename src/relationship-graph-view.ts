@@ -162,8 +162,23 @@ export class RelationshipGraphView extends ItemView {
       true,
     );
 
+    /*
+     * setViewState() waits for onOpen() before activateView() can reveal the
+     * new leaf. Rendering Sigma here synchronously can therefore see a
+     * zero-sized container and fail on the first open. Let onOpen() finish,
+     * then initialize once Obsidian has revealed and sized the view.
+     */
+    void this.initializeGraphWhenVisible();
+  }
+
+  private async initializeGraphWhenVisible(): Promise<void> {
     await this.plugin.ensureRelationshipIndexReady();
-    await this.waitForContainerLayout();
+
+    const hasLayout = await this.waitForContainerLayout(2_500);
+    if (!hasLayout || !this.graphContainerEl || !this.statusEl) {
+      return;
+    }
+
     await this.refresh();
   }
 
@@ -196,6 +211,11 @@ export class RelationshipGraphView extends ItemView {
 
   async refresh(): Promise<void> {
     if (!this.graphContainerEl || !this.statusEl) {
+      return;
+    }
+
+    if (!this.hasContainerLayout()) {
+      this.statusEl.setText("Waiting for graph view…");
       return;
     }
 
@@ -436,8 +456,8 @@ export class RelationshipGraphView extends ItemView {
       : "#17191c";
 
     const edgeColor = darkTheme
-      ? "rgba(185, 192, 202, 0.38)"
-      : "rgba(70, 76, 84, 0.28)";
+      ? "rgba(185, 192, 202, 0.45)"
+      : "rgba(45, 50, 58, 0.55)";
     const degree = new Map<string, number>();
 
     for (const relationship of data.relationships) {
@@ -492,8 +512,12 @@ export class RelationshipGraphView extends ItemView {
       ),
     );
 
-    const maximumEdgeThickness = Math.max(
+    const minimumEdgeThickness = Math.max(
       0,
+      this.plugin.settings.minimumEdgeThickness,
+    );
+    const maximumEdgeThickness = Math.max(
+      minimumEdgeThickness,
       this.plugin.settings.maximumEdgeThickness,
     );
 
@@ -508,7 +532,9 @@ export class RelationshipGraphView extends ItemView {
       const normalizedWeight =
         Math.max(0, relationship.rawWeight) / maximumRawWeight;
       const edgeSize =
-        maximumEdgeThickness * Math.pow(normalizedWeight, 2);
+        minimumEdgeThickness +
+        (maximumEdgeThickness - minimumEdgeThickness) *
+          Math.pow(normalizedWeight, 2);
 
       graph.addEdgeWithKey(
         relationship.id,
@@ -1100,10 +1126,35 @@ export class RelationshipGraphView extends ItemView {
     });
   }
 
-  private async waitForContainerLayout(): Promise<void> {
-    await new Promise<void>((resolve) => {
-      window.requestAnimationFrame(() => resolve());
-    });
+  private hasContainerLayout(): boolean {
+    const container = this.graphContainerEl;
+
+    return Boolean(
+      container &&
+      container.isConnected &&
+      container.clientWidth > 0 &&
+      container.clientHeight > 0
+    );
+  }
+
+  private async waitForContainerLayout(timeoutMs: number): Promise<boolean> {
+    const start = window.performance.now();
+
+    while (this.graphContainerEl && this.statusEl) {
+      if (this.hasContainerLayout()) {
+        return true;
+      }
+
+      if (window.performance.now() - start >= timeoutMs) {
+        return false;
+      }
+
+      await new Promise<void>((resolve) => {
+        window.requestAnimationFrame(() => resolve());
+      });
+    }
+
+    return false;
   }
 
   private isDarkTheme(): boolean {
@@ -1115,7 +1166,7 @@ export class RelationshipGraphView extends ItemView {
   }
 
   private dimmedEdgeColor(): string {
-    return this.isDarkTheme() ? "#68717d" : "#c2c7cd";
+    return this.isDarkTheme() ? "#68717d" : "#8f969e";
   }
 
   private randomizeNodePositions(): void {
